@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>네이버 검색광고 키워드 도구</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="header">
+        <h1>네이버 검색광고 키워드 도구</h1>
+        <p>키워드를 업로드하여 검색 광고 데이터를 확인하고, 결과를 CSV 파일로 다운로드하세요.</p>
+    </div>
+    <div class="container">
+        <form class="file-upload" action="/search" method="post" enctype="multipart/form-data">
+            <label for="keyword-file">키워드 파일 업로드 (txt 형식):</label>
+            <input type="file" id="keyword-file" name="keyword-file" required>
+            <button type="submit" class="btn-submit">검색량 확인하기</button>
+        </form>
+
+        <div id="table-container">
+            {{ table_html|safe }}
+        </div>
+
+        {% if csvAvailable %}
+        <div class="download-btn-container">
+            <a href="/download_csv" class="download-btn">CSV 다운로드</a>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
