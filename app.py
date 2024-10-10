@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os
 import io
 from powernad.API.RelKwdStat import RelKwdStat
+from concurrent.futures import ThreadPoolExecutor
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -34,7 +35,6 @@ def get_keyword_data(keyword):
         if kwdDataList:
             # 입력한 키워드와 정확히 일치하는 결과만 필터링
             filtered_data = [data for data in kwdDataList if getattr(data, 'relKeyword', '').lower() == keyword.lower()]
-            print(f"Filtered data for keyword '{keyword}': {filtered_data}")
             return filtered_data
         else:
             print(f"No data returned for keyword '{keyword}'")
@@ -60,26 +60,32 @@ def search_keywords():
 
     # 결과 저장을 위한 리스트
     results = []
-    for keyword in keywords:
-        kwdDataList = get_keyword_data(keyword)
-        if kwdDataList:
-            for data in kwdDataList:
-                if hasattr(data, 'relKeyword'):
-                    results.append([
-                        data.relKeyword,
-                        data.monthlyPcQcCnt if hasattr(data, 'monthlyPcQcCnt') else '<10',
-                        data.monthlyMobileQcCnt if hasattr(data, 'monthlyMobileQcCnt') else '<10',
-                        data.monthlyAvePcClkCnt if hasattr(data, 'monthlyAvePcClkCnt') else 0,
-                        data.monthlyAveMobileClkCnt if hasattr(data, 'monthlyAveMobileClkCnt') else 0,
-                        data.monthlyAvePcCtr if hasattr(data, 'monthlyAvePcCtr') else 0,
-                        data.monthlyAveMobileCtr if hasattr(data, 'monthlyAveMobileCtr') else 0,
-                        data.plAvgDepth if hasattr(data, 'plAvgDepth') else 0,
-                        data.compIdx if hasattr(data, 'compIdx') else 'low'
-                    ])
+
+    # 멀티스레딩을 사용해 키워드 데이터 병렬 처리
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_keyword = {executor.submit(get_keyword_data, keyword): keyword for keyword in keywords}
+        for future in future_to_keyword:
+            keyword = future_to_keyword[future]
+            try:
+                kwdDataList = future.result()
+                if kwdDataList:
+                    for data in kwdDataList:
+                        if hasattr(data, 'relKeyword'):
+                            results.append([
+                                data.relKeyword,
+                                data.monthlyPcQcCnt if hasattr(data, 'monthlyPcQcCnt') else '<10',
+                                data.monthlyMobileQcCnt if hasattr(data, 'monthlyMobileQcCnt') else '<10',
+                                data.monthlyAvePcClkCnt if hasattr(data, 'monthlyAvePcClkCnt') else 0,
+                                data.monthlyAveMobileClkCnt if hasattr(data, 'monthlyAveMobileClkCnt') else 0,
+                                data.monthlyAvePcCtr if hasattr(data, 'monthlyAvePcCtr') else 0,
+                                data.monthlyAveMobileCtr if hasattr(data, 'monthlyAveMobileCtr') else 0,
+                                data.plAvgDepth if hasattr(data, 'plAvgDepth') else 0,
+                                data.compIdx if hasattr(data, 'compIdx') else 'low'
+                            ])
                 else:
-                    print(f"Incomplete data for keyword '{keyword}': {data}")
-        else:
-            print(f"No valid data for keyword: {keyword}")
+                    print(f"No valid data for keyword: {keyword}")
+            except Exception as e:
+                print(f"Error processing keyword '{keyword}': {e}")
 
     if not results:
         return jsonify({'csvAvailable': False}), 500
