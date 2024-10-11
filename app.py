@@ -11,6 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 # .env 파일에서 환경 변수 로드
 load_dotenv()
 
+# error 발생 세기
+error_count=0
+
 # 네이버 검색광고 API 정보 불러오기
 BASE_URL = "https://api.searchad.naver.com"
 API_KEY = os.getenv('NAVER_API_KEY')
@@ -37,7 +40,7 @@ def batch_keywords(keywords, batch_size):
 # 네이버 검색광고 API 호출 함수 (키워드 배치 처리)
 def get_keyword_data(keyword_batch):
     rel = RelKwdStat(BASE_URL, API_KEY, SECRET_KEY, CUSTOMER_ID)
-    max_retries = 3
+    max_retries = 10
     for attempt in range(max_retries):
         try:
             # hintKeywords에 키워드 리스트를 쉼표로 구분하여 전달
@@ -70,17 +73,23 @@ def get_keyword_data(keyword_batch):
 # 키워드 검색량 확인 API 엔드포인트
 @app.route('/search', methods=['POST'])
 def search_keywords():
+    session.pop('results', None)
     file = request.files.get('keyword-file')
     if not file:
         return jsonify({'csvAvailable': False}), 400
+
+    # 상태 메시지 표시 - CSV 파일 생성 중입니다
+    session['csv_status'] = 'generating'
 
     # 키워드 파일 읽기
     try:
         keywords = file.read().decode('utf-8').splitlines()
     except Exception as e:
+        session['csv_status'] = 'error'
         return jsonify({'csvAvailable': False, 'error': str(e)}), 400
 
     if not keywords:
+        session['csv_status'] = 'error'
         return jsonify({'csvAvailable': False}), 400
 
     # 결과 저장을 위한 리스트
@@ -113,10 +122,12 @@ def search_keywords():
                 print(f"Error processing keyword batch '{batch}': {e}")
 
     if not results:
+        session['csv_status'] = 'error'
         return jsonify({'csvAvailable': False}), 500
 
     # 결과를 세션에 저장하여 CSV 다운로드 시 사용
     session['results'] = results
+    session['csv_status'] = 'ready'
 
     # 결과를 DataFrame으로 변환하고 HTML 테이블로 렌더링
     df = pd.DataFrame(results, columns=[
@@ -127,6 +138,12 @@ def search_keywords():
 
     return render_template('results.html', table_html=table_html, csvAvailable=True)
 
+# CSV 상태 확인 API 엔드포인트
+@app.route('/csv_status', methods=['GET'])
+def csv_status():
+    status = session.get('csv_status', 'not_started')
+    return jsonify({'status': status})
+
 # CSV 다운로드 엔드포인트 (스트리밍 방식)
 @app.route('/download_csv', methods=['GET'])
 def download_csv():
@@ -135,7 +152,7 @@ def download_csv():
         return "No data available.", 404
 
     def generate():
-        yield '\ufeff'  # UTF-8 with BOM
+        yield '﻿'  # UTF-8 with BOM
         header = [
             '키워드', '월간 PC 검색량', '월간 모바일 검색량', '월간 평균 PC 클릭 수',
             '월간 평균 모바일 클릭 수', '경쟁 지수'
