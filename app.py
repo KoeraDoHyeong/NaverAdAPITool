@@ -1,8 +1,10 @@
 import pandas as pd
-from flask import Flask, request, send_file, render_template, jsonify, session
+from flask import Flask, request, send_file, render_template, jsonify, session, Response
 from dotenv import load_dotenv
 import os
 import io
+import csv
+import time
 from powernad.API.RelKwdStat import RelKwdStat
 from concurrent.futures import ThreadPoolExecutor
 
@@ -27,20 +29,43 @@ app.secret_key = 'supersecretkey'
 def index():
     return render_template('index.html')
 
-# 네이버 검색광고 API 호출 함수
-def get_keyword_data(keyword):
+# 키워드를 배치로 묶는 함수
+def batch_keywords(keywords, batch_size):
+    for i in range(0, len(keywords), batch_size):
+        yield keywords[i:i + batch_size]
+
+# 네이버 검색광고 API 호출 함수 (키워드 배치 처리)
+def get_keyword_data(keyword_batch):
     rel = RelKwdStat(BASE_URL, API_KEY, SECRET_KEY, CUSTOMER_ID)
-    try:
-        kwdDataList = rel.get_rel_kwd_stat_list(siteId=None, biztpId=None, hintKeywords=keyword, event=None, month=None, showDetail='1')
-        if kwdDataList:
-            # 입력한 키워드와 정확히 일치하는 결과만 필터링
-            filtered_data = [data for data in kwdDataList if getattr(data, 'relKeyword', '').lower() == keyword.lower()]
-            return filtered_data
-        else:
-            print(f"No data returned for keyword '{keyword}'")
-    except Exception as e:
-        print(f"Error fetching data for keyword '{keyword}': {e}")
-    return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # hintKeywords에 키워드 리스트를 쉼표로 구분하여 전달
+            hint_keywords = ','.join(keyword_batch)
+            kwdDataList = rel.get_rel_kwd_stat_list(
+                siteId=None,
+                biztpId=None,
+                hintKeywords=hint_keywords,
+                event=None,
+                month=None,
+                showDetail='1'
+            )
+            if kwdDataList:
+                # 입력한 키워드와 정확히 일치하는 결과만 필터링
+                filtered_data = []
+                for keyword in keyword_batch:
+                    for data in kwdDataList:
+                        if getattr(data, 'relKeyword', '').lower() == keyword.lower():
+                            filtered_data.append(data)
+                            break  # 일치하는 데이터가 있으면 다음 키워드로 넘어감
+                return filtered_data
+            else:
+                print(f"No data returned for keywords '{keyword_batch}'")
+                return []
+        except Exception as e:
+            print(f"Error fetching data for keywords '{keyword_batch}' on attempt {attempt + 1}: {e}")
+            time.sleep(1)  # 잠시 대기 후 재시도
+    return []
 
 # 키워드 검색량 확인 API 엔드포인트
 @app.route('/search', methods=['POST'])
@@ -61,11 +86,14 @@ def search_keywords():
     # 결과 저장을 위한 리스트
     results = []
 
-    # 멀티스레딩을 사용해 키워드 데이터 병렬 처리
+    # 키워드를 5개씩 묶어서 배치 생성
+    keyword_batches = list(batch_keywords(keywords, 5))
+
+    # 멀티스레딩을 사용해 키워드 배치 데이터 병렬 처리
     with ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_keyword = {executor.submit(get_keyword_data, keyword): keyword for keyword in keywords}
-        for future in future_to_keyword:
-            keyword = future_to_keyword[future]
+        future_to_batch = {executor.submit(get_keyword_data, batch): batch for batch in keyword_batches}
+        for future in future_to_batch:
+            batch = future_to_batch[future]
             try:
                 kwdDataList = future.result()
                 if kwdDataList:
@@ -83,41 +111,54 @@ def search_keywords():
                                 data.compIdx if hasattr(data, 'compIdx') else 'low'
                             ])
                 else:
-                    print(f"No valid data for keyword: {keyword}")
+                    print(f"No valid data for keyword batch: {batch}")
             except Exception as e:
-                print(f"Error processing keyword '{keyword}': {e}")
+                print(f"Error processing keyword batch '{batch}': {e}")
 
     if not results:
         return jsonify({'csvAvailable': False}), 500
 
-    # 결과를 DataFrame으로 변환하고 CSV 파일로 저장
+    # 결과를 세션에 저장하여 CSV 다운로드 시 사용
+    session['results'] = results
+
+    # 결과를 DataFrame으로 변환하고 HTML 테이블로 렌더링
     df = pd.DataFrame(results, columns=[
         '키워드', '월간 PC 검색량', '월간 모바일 검색량', '월간 평균 PC 클릭 수',
         '월간 평균 모바일 클릭 수', 'PC 클릭률', '모바일 클릭률', '평균 광고 노출 깊이', '경쟁 지수'
     ])
-    output = io.StringIO()
-    df.to_csv(output, index=False, encoding='utf-8-sig')
-    output.seek(0)
-
-    # CSV 내용을 임시 파일로 저장
-    session['csv_data'] = output.getvalue()
-
-    # 결과를 HTML 형식으로 변환
     table_html = df.to_html(classes='table table-striped', index=False)
 
     return render_template('results.html', table_html=table_html, csvAvailable=True)
 
-# CSV 다운로드 엔드포인트
+# CSV 다운로드 엔드포인트 (스트리밍 방식)
 @app.route('/download_csv', methods=['GET'])
 def download_csv():
-    csv_data = session.get('csv_data')
-    if not csv_data:
-        return "No CSV data available.", 404
+    results = session.get('results')
+    if not results:
+        return "No data available.", 404
 
-    return send_file(io.BytesIO(csv_data.encode('utf-8-sig')),
-                     mimetype='text/csv',
-                     as_attachment=True,
-                     download_name='keyword_search_results.csv')
+    def generate():
+        yield '\ufeff'  # UTF-8 with BOM
+        header = [
+            '키워드', '월간 PC 검색량', '월간 모바일 검색량', '월간 평균 PC 클릭 수',
+            '월간 평균 모바일 클릭 수', 'PC 클릭률', '모바일 클릭률', '평균 광고 노출 깊이', '경쟁 지수'
+        ]
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(header)
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        for row in results:
+            writer.writerow(row)
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+    return Response(generate(), mimetype='text/csv', headers={
+        'Content-Disposition': 'attachment; filename="keyword_search_results.csv"'
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
