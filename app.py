@@ -105,9 +105,6 @@ def search_keywords():
                                 data.monthlyMobileQcCnt if hasattr(data, 'monthlyMobileQcCnt') else '<10',
                                 data.monthlyAvePcClkCnt if hasattr(data, 'monthlyAvePcClkCnt') else 0,
                                 data.monthlyAveMobileClkCnt if hasattr(data, 'monthlyAveMobileClkCnt') else 0,
-                                data.monthlyAvePcCtr if hasattr(data, 'monthlyAvePcCtr') else 0,
-                                data.monthlyAveMobileCtr if hasattr(data, 'monthlyAveMobileCtr') else 0,
-                                data.plAvgDepth if hasattr(data, 'plAvgDepth') else 0,
                                 data.compIdx if hasattr(data, 'compIdx') else 'low'
                             ])
                 else:
@@ -124,7 +121,7 @@ def search_keywords():
     # 결과를 DataFrame으로 변환하고 HTML 테이블로 렌더링
     df = pd.DataFrame(results, columns=[
         '키워드', '월간 PC 검색량', '월간 모바일 검색량', '월간 평균 PC 클릭 수',
-        '월간 평균 모바일 클릭 수', 'PC 클릭률', '모바일 클릭률', '평균 광고 노출 깊이', '경쟁 지수'
+        '월간 평균 모바일 클릭 수', '경쟁 지수'
     ])
     table_html = df.to_html(classes='table table-striped', index=False)
 
@@ -141,7 +138,7 @@ def download_csv():
         yield '\ufeff'  # UTF-8 with BOM
         header = [
             '키워드', '월간 PC 검색량', '월간 모바일 검색량', '월간 평균 PC 클릭 수',
-            '월간 평균 모바일 클릭 수', 'PC 클릭률', '모바일 클릭률', '평균 광고 노출 깊이', '경쟁 지수'
+            '월간 평균 모바일 클릭 수', '경쟁 지수'
         ]
         output = io.StringIO()
         writer = csv.writer(output)
